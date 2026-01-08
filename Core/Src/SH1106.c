@@ -24,7 +24,7 @@
 
 extern I2C_HandleTypeDef hi2c1;
 #define SH1106_I2C &hi2c1
-
+#define SH1106_COLUMN_OFFSET   2   // nếu chưa đúng → thử 4
 
 
 
@@ -109,17 +109,24 @@ uint8_t SH1106_Init(void) {
 }
 
 void SH1106_UpdateScreen(void) {
-	uint8_t m;
-	
-	for (m = 0; m < 8; m++) {
-		SH1106_WRITECOMMAND(0xB0 + m);
-		SH1106_WRITECOMMAND(0x00);
-		SH1106_WRITECOMMAND(0x10);
-		
-		/* Write multi data */
-		SH1106_I2C_WriteMulti(SH1106_I2C_ADDR, 0x40, &SH1106_Buffer[SH1106_WIDTH * m], SH1106_WIDTH);
-	}
+    uint8_t m;
+    uint8_t col = SH1106_COLUMN_OFFSET;
+
+    for (m = 0; m < 8; m++) {
+        SH1106_WRITECOMMAND(0xB0 + m);
+
+        SH1106_WRITECOMMAND(0x00 | (col & 0x0F));       // low column
+        SH1106_WRITECOMMAND(0x10 | (col >> 4));        // high column
+
+        SH1106_I2C_WriteMulti(
+            SH1106_I2C_ADDR,
+            0x40,
+            &SH1106_Buffer[SH1106_WIDTH * m],
+            SH1106_WIDTH
+        );
+    }
 }
+
 
 void SH1106_ToggleInvert(void) {
 	uint16_t i;

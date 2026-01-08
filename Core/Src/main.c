@@ -120,7 +120,7 @@ static void OLED_Show_EPC_If_New(const char *epc)
     strncpy(last_epc, epc, EPC_MAX_CHARS);
     last_epc[EPC_MAX_CHARS] = '\0';
     last_epc_tick = HAL_GetTick();
-    BUZZ_ON();                               // bật còi
+    //BUZZ_ON();                               // bật còi
     buzz_off_tick = HAL_GetTick() + BUZZ_BEEP_MS;
 
     // ===== VẼ OLED =====
@@ -213,6 +213,10 @@ int main(void)
   SH1106_UpdateScreen();
   OLED_Show_Empty_If_Needed();
   BUZZ_OFF();   // đảm bảo lúc bật nguồn còi tắt
+  SH1106_GotoXY(0, 0);
+  SH1106_Puts("EPC: akjwhdui198", &Font_7x10, 1);
+  SH1106_UpdateScreen();
+  HAL_Delay(2000);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -266,7 +270,7 @@ int main(void)
 	    {
 	        if (HAL_GetTick() >= buzz_next_tick)
 	        {
-	            BUZZ_ON();
+	            //BUZZ_ON();
 	            buzz_off_tick  = HAL_GetTick() + BUZZ_BEEP_MS;
 	            buzz_next_tick = HAL_GetTick() + 200; // tốc độ bíp
 	        }
