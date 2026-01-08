@@ -63,6 +63,10 @@ void Error_Handler(void);
 #define RX2_GPIO_Port GPIOA
 #define BUZZ_Pin GPIO_PIN_4
 #define BUZZ_GPIO_Port GPIOA
+#define DM_Pin GPIO_PIN_11
+#define DM_GPIO_Port GPIOA
+#define DP_Pin GPIO_PIN_12
+#define DP_GPIO_Port GPIOA
 #define SCL_Pin GPIO_PIN_6
 #define SCL_GPIO_Port GPIOB
 #define SDA_Pin GPIO_PIN_7

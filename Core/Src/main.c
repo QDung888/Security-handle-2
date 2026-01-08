@@ -20,8 +20,8 @@
 #include "main.h"
 #include "i2c.h"
 #include "usart.h"
+#include "usb.h"
 #include "gpio.h"
-#include <string.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -75,7 +75,10 @@ const uint8_t rfid_start_cmd[] = {
 char last_epc[EPC_MAX_CHARS + 1] = "EMPTY";
 uint32_t last_epc_tick = 0;
 
+uint32_t buzz_next_tick = 0;
 #define EPC_EMPTY_TIMEOUT_MS 2000  // 2 giây không có EPC → empty
+#define READER_ACTIVE_TIMEOUT_MS 100   // 100ms không có byte UART -> coi là reader ngừng
+
 
 #define BUZZ_BEEP_MS  80      // thời gian bíp (ms)
 uint32_t buzz_off_tick = 0;   // thời điểm tắt còi
@@ -202,6 +205,7 @@ int main(void)
   MX_GPIO_Init();
   MX_I2C1_Init();
   MX_USART2_UART_Init();
+  MX_USB_PCD_Init();
   /* USER CODE BEGIN 2 */
   HAL_UART_Receive_IT(&huart2, &rfid_rx, 1);   // Reader
   SH1106_Init();
@@ -210,12 +214,7 @@ int main(void)
   OLED_Show_Empty_If_Needed();
   BUZZ_OFF();   // đảm bảo lúc bật nguồn còi tắt
   /* USER CODE END 2 */
-  HAL_Delay(1000);
-  // Gửi lệnh START INVENTORY sang Reader
-  HAL_UART_Transmit(&huart2,
-                    rfid_start_cmd,
-                    sizeof(rfid_start_cmd),
-                    HAL_MAX_DELAY);
+
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
@@ -250,7 +249,35 @@ int main(void)
 	    {
 	        OLED_Show_Empty_If_Needed();
 	    }
-	    // Tắt còi sau khi bíp nhanh
+
+	    // ===== CÒI PHỤ THUỘC DATA UART =====
+	    uint8_t reader_active = 0;
+
+	    if (HAL_GetTick() - rfid_last_rx_tick < READER_ACTIVE_TIMEOUT_MS)
+	    {
+	        reader_active = 1;   // Reader còn gửi dữ liệu
+	    }
+	    else
+	    {
+	        reader_active = 0;   // Reader đã ngừng
+	    }
+
+	    if (reader_active)
+	    {
+	        if (HAL_GetTick() >= buzz_next_tick)
+	        {
+	            BUZZ_ON();
+	            buzz_off_tick  = HAL_GetTick() + BUZZ_BEEP_MS;
+	            buzz_next_tick = HAL_GetTick() + 200; // tốc độ bíp
+	        }
+	    }
+	    else
+	    {
+	        BUZZ_OFF();          // <<< TẮT NGAY
+	        buzz_off_tick = 0;
+	    }
+
+	    // tắt còi sau mỗi bíp
 	    if (buzz_off_tick != 0 && HAL_GetTick() >= buzz_off_tick)
 	    {
 	        BUZZ_OFF();
@@ -258,9 +285,9 @@ int main(void)
 	    }
 
 
-  /* USER CODE END WHILE */
+    /* USER CODE END WHILE */
 
-  /* USER CODE BEGIN 3 */
+    /* USER CODE BEGIN 3 */
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -276,6 +303,7 @@ void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
@@ -302,6 +330,12 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USB;
+  PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_PLL_DIV1_5;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
   }
