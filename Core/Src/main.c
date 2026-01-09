@@ -77,12 +77,29 @@ char last_epc[EPC_MAX_CHARS + 1] = "EMPTY";
 uint32_t last_epc_tick = 0;
 
 uint32_t buzz_next_tick = 0;
-#define EPC_EMPTY_TIMEOUT_MS 10000  // 2 giây không có EPC → empty
+#define EMPTY_UART_TIMEOUT_MS 5000   // 500ms không có UART -> EMPTY
 #define READER_ACTIVE_TIMEOUT_MS 100   // 100ms không có byte UART -> coi là reader ngừng
 
 
 #define BUZZ_BEEP_MS  80      // thời gian bíp (ms)
 uint32_t buzz_off_tick = 0;   // thời điểm tắt còi
+
+#define MAX_EPC_COUNT 16
+
+typedef struct
+{
+    char epc[EPC_MAX_CHARS + 1];
+    uint32_t last_seen_tick;
+} EPC_Item;
+
+EPC_Item epc_list[MAX_EPC_COUNT];
+uint8_t epc_count = 0;
+
+#define EPC_ALIVE_TIMEOUT_MS 1500   // 1.5s không thấy EPC → xóa
+
+uint32_t oled_next_update_tick = 0;
+#define OLED_UPDATE_PERIOD_MS 1000   // 1 giây vẽ 1 lần
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -212,6 +229,116 @@ static void OLED_Show_Empty_If_Needed(void)
     SH1106_UpdateScreen();
 }
 
+static void EPC_Add_If_New(const char *epc)
+{
+    uint32_t now = HAL_GetTick();
+
+    if (epc == NULL || epc[0] == '\0')
+        return;
+
+    for (uint8_t i = 0; i < epc_count; i++)
+    {
+        if (strcmp(epc_list[i].epc, epc) == 0)
+        {
+            epc_list[i].last_seen_tick = now;
+            return;
+        }
+    }
+
+    if (epc_count < MAX_EPC_COUNT)
+    {
+        strcpy(epc_list[epc_count].epc, epc);
+        epc_list[epc_count].last_seen_tick = now;
+        epc_count++;
+    }
+}
+
+
+static uint8_t EPC_Line_Count(const char *epc)
+{
+    uint16_t len = strlen(epc);
+    const uint8_t chars_per_line = 18;
+
+    if (len == 0)
+        return 0;
+
+    return (len + chars_per_line - 1) / chars_per_line;
+}
+
+static void OLED_Show_EPC_List_Page(void)
+{
+    SH1106_Clear();
+
+    // ===== DÒNG TIÊU ĐỀ =====
+    SH1106_GotoXY(0, 0);
+    SH1106_Puts("EPC:", &Font_7x10, 1);
+
+    uint8_t y = 12;                    // bắt đầu in EPC từ dòng 2
+    uint8_t remaining_lines = 4;       // tối đa 4 dòng EPC
+    const uint8_t chars_per_line = 17; // chừa 1 ký tự cho '-'
+
+    for (uint8_t idx = 0; idx < epc_count && remaining_lines > 0; idx++)
+    {
+        const char *epc = epc_list[idx].epc;
+        uint8_t first_line = 1;
+
+        while (*epc && remaining_lines > 0)
+        {
+            char buf[19];
+            uint8_t i = 0;
+
+            if (first_line)
+            {
+                buf[i++] = '-';
+                buf[i++] = ' ';
+
+                while (*epc && i < 18)
+                    buf[i++] = *epc++;
+
+                first_line = 0;
+            }
+            else
+            {
+                while (*epc && i < 18)
+                    buf[i++] = *epc++;
+            }
+
+            buf[i] = '\0';
+
+            SH1106_GotoXY(0, y);
+            SH1106_Puts(buf, &Font_7x10, 1);
+
+            y += 12;
+            remaining_lines--;
+        }
+    }
+
+    SH1106_UpdateScreen();
+}
+
+
+static void EPC_Remove_Expired(void)
+{
+    uint32_t now = HAL_GetTick();
+
+    for (uint8_t i = 0; i < epc_count; )
+    {
+        if ((now - epc_list[i].last_seen_tick) > EPC_ALIVE_TIMEOUT_MS)
+        {
+            // dồn mảng
+            for (uint8_t j = i; j < epc_count - 1; j++)
+                epc_list[j] = epc_list[j + 1];
+
+            epc_count--;
+        }
+        else
+        {
+            i++;
+        }
+    }
+}
+
+
 /* USER CODE END 0 */
 
 /**
@@ -283,7 +410,8 @@ int main(void)
 	    	    uint8_t *epc_ptr = &rfid_buf[9];
 	    	    char epc_str[EPC_MAX_CHARS + 1];
 	    	    bytes_to_hex(epc_ptr, epc_len, epc_str);
-	    	    OLED_Show_EPC_If_New(epc_str);
+	    	    //OLED_Show_EPC_If_New(epc_str);
+	    	    EPC_Add_If_New(epc_str);
 	    	}
 
 	    	// ===== 2. GỬI RAW READER -> PC =====
@@ -306,17 +434,9 @@ int main(void)
 	    	// ===== 3. RESET SAU CÙNG =====
 	    	rfid_len = 0;
 
-
-
-	    	// ===== 3. RESET SAU CÙNG =====
-	    	rfid_len = 0;
-
 	    }
 	    // Nếu quá lâu không có EPC mới → hiển thị empty
-	    if ((HAL_GetTick() - last_epc_tick) > EPC_EMPTY_TIMEOUT_MS)
-	    {
-	        OLED_Show_Empty_If_Needed();
-	    }
+
 
 	    // ===== CÒI PHỤ THUỘC DATA UART =====
 	    uint8_t reader_active = 0;
@@ -329,6 +449,24 @@ int main(void)
 	    {
 	        reader_active = 0;   // Reader đã ngừng
 	    }
+	    // ===== EMPTY DỰA THEO UART =====
+	    if ((HAL_GetTick() - rfid_last_rx_tick) > EMPTY_UART_TIMEOUT_MS)
+	    {
+	        OLED_Show_Empty_If_Needed();
+	        epc_count = 0;    // reset số lượng EPC
+	    }
+	    else
+	    {
+	        EPC_Remove_Expired();
+	        // ===== HIỂN THỊ DANH SÁCH EPC =====
+	        if (HAL_GetTick() >= oled_next_update_tick)
+	        {
+	            OLED_Show_EPC_List_Page();
+	            oled_next_update_tick = HAL_GetTick() + OLED_UPDATE_PERIOD_MS;
+	        }
+	    }
+
+
 
 	    if (reader_active)
 	    {
