@@ -185,8 +185,11 @@ static void OLED_Show_EPC_If_New(const char *epc)
     // ===== VẼ OLED =====
     SH1106_Clear();
 
+    char header[16];
+    sprintf(header, "EPC: %d", epc_count);
+
     SH1106_GotoXY(0, 0);
-    SH1106_Puts("EPC:", &Font_7x10, 1);
+    SH1106_Puts(header, &Font_7x10, 1);
 
     uint8_t y = 12;
     const uint8_t chars_per_line = 18;
@@ -272,8 +275,11 @@ static void OLED_Show_EPC_List_Page(void)
     SH1106_Clear();
 
     // ===== DÒNG TIÊU ĐỀ =====
+    char header[16];
+    sprintf(header, "EPC: %d", epc_count);
+
     SH1106_GotoXY(0, 0);
-    SH1106_Puts("EPC:", &Font_7x10, 1);
+    SH1106_Puts(header, &Font_7x10, 1);
 
     uint8_t y = 12;                    // bắt đầu in EPC từ dòng 2
     uint8_t remaining_lines = 4;       // tối đa 4 dòng EPC
