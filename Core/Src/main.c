@@ -95,10 +95,12 @@ typedef struct
 EPC_Item epc_list[MAX_EPC_COUNT];
 uint8_t epc_count = 0;
 
-#define EPC_ALIVE_TIMEOUT_MS 1500   // 1.5s không thấy EPC → xóa
+#define EPC_ALIVE_TIMEOUT_MS 3000   // 1.5s không thấy EPC → xóa
 
 uint32_t oled_next_update_tick = 0;
 #define OLED_UPDATE_PERIOD_MS 1000   // 1 giây vẽ 1 lần
+uint8_t epc_display_index = 0;   // vị trí EPC bắt đầu hiển thị (cuốn chiếu)
+
 
 /* USER CODE END PV */
 
@@ -277,9 +279,13 @@ static void OLED_Show_EPC_List_Page(void)
     uint8_t remaining_lines = 4;       // tối đa 4 dòng EPC
     const uint8_t chars_per_line = 17; // chừa 1 ký tự cho '-'
 
-    for (uint8_t idx = 0; idx < epc_count && remaining_lines > 0; idx++)
+    uint8_t idx = epc_display_index;  // bắt đầu từ EPC đang nhớ
+    uint8_t shown = 0;                // đếm số EPC đã in
+
+    while (shown < epc_count && remaining_lines > 0)
     {
         const char *epc = epc_list[idx].epc;
+
         uint8_t first_line = 1;
 
         while (*epc && remaining_lines > 0)
@@ -311,7 +317,17 @@ static void OLED_Show_EPC_List_Page(void)
             y += 12;
             remaining_lines--;
         }
+        /* ===== CHUYỂN SANG EPC TIẾP THEO ===== */
+        idx++;
+        if (idx >= epc_count)
+            idx = 0;
+
+        shown++;
     }
+    // Dịch vị trí hiển thị cho lần sau (cuốn chiếu)
+    epc_display_index++;
+    if (epc_display_index >= epc_count)
+        epc_display_index = 0;
 
     SH1106_UpdateScreen();
 }
