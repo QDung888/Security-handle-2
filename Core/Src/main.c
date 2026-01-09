@@ -20,14 +20,15 @@
 #include "main.h"
 #include "i2c.h"
 #include "usart.h"
-#include "usb.h"
+#include "usb_device.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "fonts.h"
 #include "SH1106.h"
-
+#include "usbd_cdc_if.h"
+#include "string.h"
 /* SH1106 width in pixels */
 #ifndef SH1106_WIDTH
 #define SH1106_WIDTH            128
@@ -76,7 +77,7 @@ char last_epc[EPC_MAX_CHARS + 1] = "EMPTY";
 uint32_t last_epc_tick = 0;
 
 uint32_t buzz_next_tick = 0;
-#define EPC_EMPTY_TIMEOUT_MS 2000  // 2 giây không có EPC → empty
+#define EPC_EMPTY_TIMEOUT_MS 10000  // 2 giây không có EPC → empty
 #define READER_ACTIVE_TIMEOUT_MS 100   // 100ms không có byte UART -> coi là reader ngừng
 
 
@@ -92,6 +93,45 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+//static void OLED_Show_TX_Data_Hex(const uint8_t *data, uint16_t len)
+//{
+//    static const char hex[] = "0123456789ABCDEF";
+//    char line[22];   // vừa 1 dòng OLED với Font_7x10
+//
+//    SH1106_Clear();
+//
+//    SH1106_GotoXY(0, 0);
+//    SH1106_Puts("TX to Reader:", &Font_7x10, 1);
+//
+//    uint8_t y = 12;
+//    uint16_t idx = 0;
+//
+//    while (idx < len && y <= 54)
+//    {
+//        uint8_t pos = 0;
+//
+//        while (idx < len && pos < 21)
+//        {
+//            uint8_t b = data[idx++];
+//
+//            line[pos++] = hex[(b >> 4) & 0x0F];
+//            line[pos++] = hex[b & 0x0F];
+//
+//            if (pos < 21)
+//                line[pos++] = ' ';
+//        }
+//
+//        line[pos] = '\0';
+//
+//        SH1106_GotoXY(0, y);
+//        SH1106_Puts(line, &Font_7x10, 1);
+//
+//        y += 12;
+//    }
+//
+//    SH1106_UpdateScreen();
+//}
+
 // Chuyển mảng byte sang chuỗi HEX ASCII
 static void bytes_to_hex(const uint8_t *in, uint8_t len, char *out)
 {
@@ -120,7 +160,7 @@ static void OLED_Show_EPC_If_New(const char *epc)
     strncpy(last_epc, epc, EPC_MAX_CHARS);
     last_epc[EPC_MAX_CHARS] = '\0';
     last_epc_tick = HAL_GetTick();
-    //BUZZ_ON();                               // bật còi
+    BUZZ_ON();                               // bật còi
     buzz_off_tick = HAL_GetTick() + BUZZ_BEEP_MS;
 
     // ===== VẼ OLED =====
@@ -205,18 +245,20 @@ int main(void)
   MX_GPIO_Init();
   MX_I2C1_Init();
   MX_USART2_UART_Init();
-  MX_USB_PCD_Init();
+  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
   HAL_UART_Receive_IT(&huart2, &rfid_rx, 1);   // Reader
+  // ===== AUTO START RFID READER =====
+  HAL_Delay(100);  // đợi reader ổn định sau reset
+  HAL_UART_Transmit(&huart2,
+                    (uint8_t *)rfid_start_cmd,
+                    sizeof(rfid_start_cmd),
+                    100);
   SH1106_Init();
   SH1106_Clear();
   SH1106_UpdateScreen();
   OLED_Show_Empty_If_Needed();
   BUZZ_OFF();   // đảm bảo lúc bật nguồn còi tắt
-  SH1106_GotoXY(0, 0);
-  SH1106_Puts("EPC: akjwhdui198", &Font_7x10, 1);
-  SH1106_UpdateScreen();
-  HAL_Delay(2000);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -233,20 +275,42 @@ int main(void)
 	          Byte 9..   : EPC data
 	        */
 
-	        uint8_t epc_len = rfid_buf[8];  // ví dụ: 0x0C = 12
+	    	// ===== 1. PARSE + OLED =====
+	    	uint8_t epc_len = rfid_buf[8];
 
-	        // kiểm tra an toàn
-	        if (epc_len > 0 && (9 + epc_len) <= rfid_len)
-	        {
-	            uint8_t *epc_ptr = &rfid_buf[9];
+	    	if (epc_len > 0 && (9 + epc_len) <= rfid_len)
+	    	{
+	    	    uint8_t *epc_ptr = &rfid_buf[9];
+	    	    char epc_str[EPC_MAX_CHARS + 1];
+	    	    bytes_to_hex(epc_ptr, epc_len, epc_str);
+	    	    OLED_Show_EPC_If_New(epc_str);
+	    	}
 
-	            char epc_str[EPC_MAX_CHARS + 1];
-	            bytes_to_hex(epc_ptr, epc_len, epc_str);
-	            OLED_Show_EPC_If_New(epc_str);
-	        }
+	    	// ===== 2. GỬI RAW READER -> PC =====
+	    	uint32_t t0 = HAL_GetTick();
+	    	while (CDC_Transmit_FS(rfid_buf, rfid_len) == USBD_BUSY)
+	    	{
+	    	    if (HAL_GetTick() - t0 > 20) break;  // timeout 20ms
+	    	}
+	    	// ===== 2. GỬI RAW READER -> PC (CÓ TIMEOUT, CHỐNG TREO) =====
+	    	if (rfid_len > 0)
+	    	{
+	    	    uint32_t t0 = HAL_GetTick();
+	    	    while (CDC_Transmit_FS(rfid_buf, rfid_len) == USBD_BUSY)
+	    	    {
+	    	        if (HAL_GetTick() - t0 > 20)   // timeout 20ms
+	    	            break;
+	    	    }
+	    	}
 
-	        // reset buffer raw RFID
-	        rfid_len = 0;
+	    	// ===== 3. RESET SAU CÙNG =====
+	    	rfid_len = 0;
+
+
+
+	    	// ===== 3. RESET SAU CÙNG =====
+	    	rfid_len = 0;
+
 	    }
 	    // Nếu quá lâu không có EPC mới → hiển thị empty
 	    if ((HAL_GetTick() - last_epc_tick) > EPC_EMPTY_TIMEOUT_MS)
@@ -270,9 +334,9 @@ int main(void)
 	    {
 	        if (HAL_GetTick() >= buzz_next_tick)
 	        {
-	            //BUZZ_ON();
+	            BUZZ_ON();
 	            buzz_off_tick  = HAL_GetTick() + BUZZ_BEEP_MS;
-	            buzz_next_tick = HAL_GetTick() + 200; // tốc độ bíp
+	            buzz_next_tick = HAL_GetTick() + 100; // tốc độ bíp
 	        }
 	    }
 	    else
@@ -287,7 +351,18 @@ int main(void)
 	        BUZZ_OFF();
 	        buzz_off_tick = 0;
 	    }
+	    ////////////////////// USART Bridge///////////////////
+	    if (cdc_cmd_ready)
+	    {
+	        cdc_cmd_ready = 0;
 
+	        // 1. GỬI DATA PC → READER
+	        HAL_UART_Transmit(&huart2,
+	                          cdc_rx_buf,
+	                          cdc_rx_len,
+	                          100);
+
+	    }
 
     /* USER CODE END WHILE */
 
